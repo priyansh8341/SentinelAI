@@ -1,0 +1,141 @@
+INFORMATION.TXT
+Project: SentinelAI – Autonomous Business Intelligence Agent
+
+--------------------------------------------------
+1. PROJECT SUMMARY
+--------------------------------------------------
+SentinelAI is an autonomous, snapshot-driven AI agent designed to simulate how professional analysts monitor information, detect meaningful changes, and generate structured business intelligence reports.
+
+Unlike traditional chatbots that wait for user prompts, SentinelAI proactively reasons over changes in information and produces insights automatically.
+
+The system follows an Observe → Reason → Report workflow.
+
+--------------------------------------------------
+2. CORE IDEA
+--------------------------------------------------
+Most AI tools are reactive and require explicit user questions.
+
+SentinelAI:
+- Observes new information snapshots
+- Compares them to previous states
+- Reasons about what changed
+- Generates professional insights automatically
+
+This mirrors real enterprise decision-making workflows.
+
+--------------------------------------------------
+3. COMPLETE TECHNOLOGY STACK
+--------------------------------------------------
+
+Backend:
+- Python 3
+- FastAPI (API framework and web server)
+- Uvicorn (ASGI server)
+- Requests (HTTP client for LLM calls)
+
+AI / LLM Layer:
+- Ollama (local LLM runtime)
+- LLaMA 3 (reasoning model)
+- Prompt-based reasoning (no fine-tuning)
+
+Frontend:
+- HTML5
+- CSS3 (custom enterprise dark UI)
+- Vanilla JavaScript
+
+Architecture Pattern:
+- Agent-based design
+- Snapshot comparison
+- Stateless reasoning with short-term memory
+- Modular components (Observer, Reasoner, Reporter)
+
+--------------------------------------------------
+4. SYSTEM ARCHITECTURE
+--------------------------------------------------
+
+Snapshot Input
+   ↓
+Change Detection
+   ↓
+LLM Reasoning Agent
+   ↓
+Impact & Risk Analysis
+   ↓
+Structured Intelligence Output
+   ↓
+Web Dashboard
+
+--------------------------------------------------
+5. KEY FUNCTIONAL COMPONENTS
+--------------------------------------------------
+
+Snapshot Engine:
+- Accepts new information as text
+- Stores previous snapshot
+- Enables change-focused reasoning
+
+Reasoning Agent:
+- Uses an LLM as a decision engine
+- Produces structured output:
+  * Key changes
+  * Impact analysis
+  * Risks
+  * Monitoring points
+  * Action checklist
+
+Web Dashboard:
+- Professional analyst-style interface
+- Preset scenarios for instant demo
+- Timeline of agent runs
+- Copy-ready output
+
+--------------------------------------------------
+6. EXAMPLE USE CASES
+--------------------------------------------------
+- Market intelligence
+- Risk and compliance monitoring
+- Operations analysis
+- Supply chain disruption analysis
+- Executive daily briefings
+
+--------------------------------------------------
+7. WHY THIS PROJECT IS UNIQUE
+--------------------------------------------------
+- Not a chatbot
+- Not Q&A based
+- Autonomous reasoning
+- Change-driven intelligence
+- Enterprise-style output
+
+--------------------------------------------------
+8. INTERVIEW QUESTIONS & ANSWERS
+--------------------------------------------------
+
+Q: What does your project do?
+A: SentinelAI autonomously analyzes changes in information and generates structured business intelligence insights without requiring user prompts.
+
+Q: How is this different from ChatGPT?
+A: ChatGPT is reactive and conversational. SentinelAI is proactive and autonomous, designed to reason over changes and produce analyst-style reports.
+
+Q: Why use an LLM?
+A: LLMs excel at contextual reasoning, allowing the system to evaluate nuanced changes without hard-coded rules.
+
+Q: Is this production-ready?
+A: The architecture is production-ready. Additional layers like authentication, persistent storage, and automated ingestion would be added in production.
+
+Q: What kind of data can it analyze?
+A: Any unstructured or semi-structured text such as news, logs, KPIs, or regulatory updates.
+
+Q: Why snapshots?
+A: Snapshots reduce noise and focus the system on meaningful changes, similar to how analysts work.
+
+Q: How would you improve it?
+A: By adding multi-agent roles, long-term memory, automated feeds, and alerting mechanisms.
+
+Q: Why did you build this?
+A: To demonstrate how LLMs can be used as reasoning engines for autonomous decision support systems.
+
+--------------------------------------------------
+9. KEY TAKEAWAY
+--------------------------------------------------
+SentinelAI demonstrates autonomous AI-agent design, practical LLM usage, enterprise-oriented thinking, and real-world applicability.
