@@ -1,35 +1,49 @@
-from fastapi import FastAPI
+from pathlib import Path
+from difflib import unified_diff
+import os
+import threading
+from fastapi import FastAPI,HTTPException
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
-from agent import reason_over_changes
-from datetime import datetime
+from pydantic import BaseModel,ConfigDict,Field
+from agent import reason_over_changes,ModelUnavailable,model_name
+from storage import SnapshotStore,RevisionConflict
+from observer import detect_change
 
-app = FastAPI()
-
-STATE = {
-    "previous": "",
-    "current": "",
-    "last_insight": "",
-    "last_updated": None,
-    "history": []  # store last runs
-}
-
+app=FastAPI(title='SentinelAI Snapshot Comparison',version='0.2.0')
+store=SnapshotStore(os.getenv('SENTINEL_DB_PATH',str(Path(__file__).resolve().parents[1]/'data/sentinel.db')))
+update_lock=threading.Lock()
 class UpdateIn(BaseModel):
-    snapshot: str
+    model_config=ConfigDict(extra='forbid',str_strip_whitespace=True)
+    snapshot:str=Field(min_length=1,max_length=6000)
 
-@app.get("/health")
-def health():
-    return {"ok": True}
+@app.get('/health')
+def health():return {'ok':True,'version':'0.2.0','model':model_name(),'storage':'SQLite','mode':'manual snapshot comparison'}
+
+def state(changed=False):
+    row=store.latest()
+    return {'insight':row['insight'] if row else '', 'last_updated':row['created'] if row else None,
+            'snapshot':row['snapshot'] if row else '', 'history':store.history(), 'changed':changed,
+            'mode':row['mode'] if row else 'empty','diff':row['diff'] if row else '',
+            'revision':row['id'] if row else None,'model':model_name()}
+
+@app.get('/state')
+def current_state():return state()
+
+@app.get('/export')
+def export_latest():
+    row=store.latest()
+    if not row:raise HTTPException(404,'No snapshot has been saved.')
+    return row
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    return """
+    return r"""
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>SentinelAI – Autonomous Intelligence Agent</title>
+  <title>SentinelAI – Snapshot Comparison</title>
   <style>
     :root{
       --bg0:#070b14;
@@ -44,7 +58,7 @@ def home():
       --warn:#ffcc66;
       --danger:#ff6b6b;
     }
-    *{box-sizing:border-box}
+    *{box-sizing:border-box} .wrap,.card,.cardBody{min-width:0} .top{flex-wrap:wrap} .out{overflow-wrap:anywhere} button:disabled{opacity:.5;cursor:wait} a.btn{text-decoration:none;display:inline-block} button:focus-visible,textarea:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid #7bd0ff;outline-offset:3px}
     body{
       margin:0;
       font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
@@ -205,8 +219,8 @@ def home():
     <div class="brand">
       <div class="dot"></div>
       <div>
-        <div class="title">SentinelAI – Autonomous Business Intelligence Agent</div>
-        <div class="sub">Observe → Reason → Report (local LLM via Ollama) • Snapshot-driven agent demo</div>
+        <div class="title">SentinelAI – Snapshot Comparison</div>
+        <div class="sub">Save a baseline → compare a revision → review evidence and a model-written brief</div>
       </div>
     </div>
 
@@ -223,27 +237,27 @@ def home():
       <div class="cardHead">
         <div>
           <h3>New Snapshot</h3>
-          <div class="hint">Pick a preset (professional examples) or paste your own. The agent compares against the previous snapshot.</div>
+          <div class="hint">First submission saves a baseline. Revised snapshots produce an exact text diff and a model-written comparison.</div>
         </div>
         <div class="row">
-          <select id="preset">
-            <option value="0">Preset 1 — Macro Risk (Rates/FX)</option>
-            <option value="1">Preset 2 — Earnings Shock (Tech)</option>
-            <option value="2">Preset 3 — Supply Chain (Oil/Shipping)</option>
-            <option value="3">Preset 4 — Crypto + Regulation</option>
+          <select id="preset" aria-label="Snapshot preset">
+            <option value="0">Operations baseline</option>
+            <option value="1">Operations revision</option>
+            <option value="2">Release baseline</option>
+            <option value="3">Release revision</option>
           </select>
           <button class="btn btnGhost" id="loadPreset">Load</button>
           <button class="btn btnGhost" id="clear">Clear</button>
-          <button class="btn btnPrimary" id="run">Run Agent</button>
+          <button class="btn btnPrimary" id="run">Save / Compare</button>
         </div>
       </div>
 
       <div class="cardBody">
-        <textarea id="snapshot" placeholder="Paste a snapshot here (news, KPIs, incidents, risk memo)…"></textarea>
+        <textarea id="snapshot" aria-label="Snapshot text" maxlength="6000" placeholder="Paste a snapshot here (news, KPIs, incidents, risk memo)…"></textarea>
 
         <div class="kpiRow">
           <div class="kpi">
-            <div class="label">Snapshot Quality</div>
+            <div class="label">Input length</div>
             <div class="value" id="qScore">—</div>
           </div>
           <div class="kpi">
@@ -262,18 +276,19 @@ def home():
     <div class="card">
       <div class="cardHead">
         <div>
-          <h3>Agent Output</h3>
-          <div class="hint">Structured insight (changes, impact, risks, what to monitor). This is what you show HR.</div>
+          <h3>Comparison Brief</h3>
+          <div class="hint">Model-written brief for human review. Inspect the exact diff below; model interpretations can be wrong.</div>
         </div>
         <div class="row">
-          <button class="btn btnGhost" id="copy">Copy Output</button>
+          <button class="btn btnGhost" id="copy">Copy Output</button><a class="btn btnGhost" href="/export" download="sentinel-report.json">Export JSON</a>
         </div>
       </div>
 
       <div class="cardBody">
-        <div id="out" class="out">Click “Run Agent” to generate an analyst brief.</div>
+        <div id="out" class="out">Save a baseline, then submit a revised snapshot.</div>
 
-        <div style="margin-top:12px">
+        <details style="margin-top:14px"><summary>Exact text changes</summary><pre id="diff" style="white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7"></pre></details>
+<div style="margin-top:12px">
           <h3 style="margin:0 0 8px 0; font-size:14px">Run Timeline</h3>
           <div id="timeline" class="timeline"></div>
         </div>
@@ -282,7 +297,7 @@ def home():
   </div>
 
   <div class="footer">
-    Pro tip: In the interview say “This is snapshot-based autonomy: observe → reason → report; not a reactive chatbot.”
+    Manual local prototype · SQLite history · no automated feeds, forecasting or external actions
   </div>
 </div>
 
@@ -290,37 +305,26 @@ def home():
 const $ = (id)=>document.getElementById(id);
 
 const PRESETS = [
-`MACRO SNAPSHOT (NEW):
-- US yields spike after hotter-than-expected inflation print; rate-cut odds repriced lower.
-- USD strengthens broadly; EM FX under pressure; liquidity thinner into month-end.
-- Equities wobble; defensives bid; volatility up; credit spreads inch wider.
-
-TASK:
-Produce an analyst brief for tomorrow: market impact, risk flags, and what to watch next.`,
-
-`EARNINGS SNAPSHOT (NEW):
-- Megacap tech reports earnings: revenue beat but guidance comes in cautious due to margin pressure.
-- Buyback increased, but commentary signals slower enterprise demand next quarter.
-- Sell-side notes: mixed tone, target revisions likely; options market pricing elevated move.
-
-TASK:
-Produce a trader-style brief: bull/bear cases, key numbers, and next catalysts.`,
-
-`SUPPLY CHAIN SNAPSHOT (NEW):
-- Crude oil rises on supply disruption headlines; shipping risk premium increasing.
-- Freight rates jump; insurers adjust premiums; lead times widen for critical components.
-- Industrials and airlines react; input costs likely to flow through in 2–6 weeks.
-
-TASK:
-Write an operations + market impact brief: second-order effects, risks, and indicators to monitor.`,
-
-`CRYPTO + REGULATION SNAPSHOT (NEW):
-- Major regulator signals stricter exchange compliance timeline; enforcement rhetoric increases.
-- BTC/ETH volatile; funding rates flip; stablecoin flows spike between venues.
-- Risk appetite sensitive to headlines; correlation with tech returns.
-
-TASK:
-Produce a concise brief: what changed, why it matters, risks, and tomorrow checklist.`
+`Operations status
+Open incidents: 2
+API error rate: 0.5%
+Order backlog: 18
+Owner: operations`,
+`Operations status
+Open incidents: 5
+API error rate: 1.8%
+Order backlog: 33
+Owner: operations`,
+`Release status
+Version: 1.4
+Passed checks: 18
+Failed checks: 0
+Rollback prepared: yes`,
+`Release status
+Version: 1.5
+Passed checks: 16
+Failed checks: 2
+Rollback prepared: yes`
 ];
 
 function setStatus(t){ $("status").textContent = t; }
@@ -328,7 +332,7 @@ function setStamp(t){ $("stamp").textContent = t; }
 
 function updateMiniKPIs(text){
   const len = text.trim().length;
-  $("qScore").textContent = len < 200 ? "Low (add detail)" : (len < 600 ? "Good" : "Strong");
+  $("qScore").textContent = len < 200 ? "Short" : (len < 600 ? "Medium" : "Long");
   const s = text.toLowerCase();
   $("theme").textContent =
     s.includes("inflation") || s.includes("yields") || s.includes("usd") ? "Macro / Rates" :
@@ -336,7 +340,7 @@ function updateMiniKPIs(text){
     s.includes("shipping") || s.includes("supply") || s.includes("freight") ? "Supply Chain" :
     s.includes("crypto") || s.includes("btc") || s.includes("regulator") ? "Crypto / Reg" :
     "General";
-  $("nextAction").textContent = "Run agent → review risks";
+  $("nextAction").textContent = "Save baseline / compare revision";
 }
 
 function renderTimeline(items){
@@ -346,16 +350,14 @@ function renderTimeline(items){
     root.innerHTML = '<div class="tItem"><div class="topline"><div class="tag">No runs yet</div><div class="when">—</div></div></div>';
     return;
   }
-  for(const it of items.slice(0,6)){
+  for(const it of items.slice(0,10)){
     const div = document.createElement("div");
     div.className = "tItem";
-    div.innerHTML = `
-      <div class="topline">
-        <div class="tag">${it.tag}</div>
-        <div class="when">${it.when}</div>
-      </div>
-      <div class="when" style="margin-top:6px">${it.note}</div>
-    `;
+    const title=document.createElement('div');title.className='topline';
+    const tag=document.createElement('span');tag.textContent=it.tag;
+    const when=document.createElement('span');when.className='when';when.textContent=it.when;
+    title.append(tag,when);const note=document.createElement('div');note.className='when';note.textContent=it.note;
+    div.append(title,note);
     root.appendChild(div);
   }
 }
@@ -383,37 +385,25 @@ $("copy").onclick = async () => {
   }
 };
 
-async function runAgent(){
-  const snap = $("snapshot").value.trim();
-  if(!snap){
-    $("out").textContent = "Paste a snapshot or load a preset first.";
-    return;
-  }
-
-  setStatus("Thinking…");
-  $("out").textContent = "Running agent…";
-
-  const res = await fetch("/update", {
-    method:"POST",
-    headers: {"Content-Type":"application/json"},
-    body: JSON.stringify({snapshot: snap})
-  });
-
-  const data = await res.json();
-
-  if(!res.ok || data.error){
-    setStatus("Error");
-    $("out").textContent = "Error: " + (data.error || "Request failed");
-    return;
-  }
-
-  $("out").textContent = data.insight || "(no output)";
-  setStamp(data.last_updated || "—");
-  renderTimeline(data.history || []);
-  setStatus("Done");
-  setTimeout(()=>setStatus("Idle"), 1200);
+async function applyState(data){
+  $('out').textContent=data.insight||'Save a baseline to begin.';
+  $('diff').textContent=data.diff||'No recorded diff yet.';
+  setStamp(data.last_updated||'—');renderTimeline(data.history||[]);
 }
-
+async function runAgent(){
+  const snap=$('snapshot').value.trim();if(!snap){$('out').textContent='Paste a snapshot first.';return;}
+  $('run').disabled=true;setStatus('Working…');
+  try{
+    const response=await fetch('/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({snapshot:snap})});
+    const data=await response.json();if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:'Invalid input or comparison failed.');
+    await applyState(data);setStatus(data.mode==='unchanged'?'Unchanged · no model call':data.mode==='baseline'?'Baseline saved':'Compared');
+  }catch(error){setStatus('Error');$('out').textContent=error.message;}
+  finally{$('run').disabled=false;}
+}
+async function restore(){
+  try{const response=await fetch('/state');if(!response.ok)throw new Error('Could not load saved history.');const data=await response.json();if(data.snapshot)$('snapshot').value=data.snapshot;await applyState(data);updateMiniKPIs($('snapshot').value);}
+  catch(error){setStatus('History unavailable');}
+}
 $("run").onclick = runAgent;
 
 // load a preset by default
@@ -421,43 +411,26 @@ $("preset").value = "0";
 $("snapshot").value = PRESETS[0];
 updateMiniKPIs($("snapshot").value);
 renderTimeline([]);
+restore();
 </script>
 </body>
 </html>
 """
 
-@app.post("/update")
-def update(payload: UpdateIn):
+@app.post('/update')
+def update(payload:UpdateIn):
+    if not update_lock.acquire(blocking=False):raise HTTPException(409,'A comparison is already running. Wait for it to finish.')
     try:
-        prev = STATE["current"]
-        curr = payload.snapshot
-
-        insight = reason_over_changes(prev, curr)
-
-        STATE["previous"] = prev
-        STATE["current"] = curr
-        STATE["last_insight"] = insight
-        STATE["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        # simple history tag
-        tag = "Run"
-        low = curr.lower()
-        if "inflation" in low or "yields" in low or "usd" in low: tag = "Macro"
-        elif "earnings" in low or "guidance" in low: tag = "Earnings"
-        elif "shipping" in low or "supply" in low or "freight" in low: tag = "Supply"
-        elif "crypto" in low or "btc" in low or "regulator" in low: tag = "Crypto"
-
-        STATE["history"].insert(0, {
-            "when": STATE["last_updated"],
-            "tag": tag,
-            "note": (curr.strip().splitlines()[0][:80] + "…") if curr.strip() else "—"
-        })
-        STATE["history"] = STATE["history"][:10]
-
-        return {
-            "insight": insight,
-            "last_updated": STATE["last_updated"],
-            "history": STATE["history"]
-        }
-    except Exception as e:
-        return {"error": str(e)}
+        previous=store.latest()
+        if previous and not detect_change(previous['snapshot'],payload.snapshot):
+            result=state();result['mode']='unchanged';return result
+        diff='\n'.join(unified_diff((previous['snapshot'] if previous else '').splitlines(),payload.snapshot.splitlines(),fromfile='previous',tofile='current',lineterm=''))
+        if previous:
+            insight=reason_over_changes(previous['snapshot'],payload.snapshot);mode='model'
+        else:
+            insight='Baseline saved. Submit a revised snapshot to compare changes. No model call was made.';mode='baseline'
+        store.save(previous['id'] if previous else None,payload.snapshot,insight,diff,mode,model_name() if previous else 'not called')
+        return state(changed=previous is not None)
+    except ModelUnavailable as exc:raise HTTPException(503,str(exc)) from exc
+    except RevisionConflict as exc:raise HTTPException(409,'Another update changed the baseline. Refresh and compare again.') from exc
+    finally:update_lock.release()
